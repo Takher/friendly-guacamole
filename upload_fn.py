@@ -1,23 +1,43 @@
+import ast
+from collections import OrderedDict
 import json
 import requests
+import time
 
-from collections import OrderedDict
+def send_data(TOKEN, batch, index, path):
+    # Structure data in specified format
+    data = {}
+    data['comments'] = batch
 
+    delay = 0
 
-def send_data(TOKEN, data, index):
-    data = json.dumps(data)
+    data_json = json.dumps(data)
     headers = {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}
 
-    # Have not checked to see if try/except actually catches problems with batches
-    try:
-        response = requests.put(
-            "https://reinfer.io/api/voc/datasets/tanrajbir/ubuntu_support_chat/comments",
-            headers=headers, data=data)
-        print response.content
-        print index, 'working' # index starts from 0
-    except:
-        print index, "problem"
+    # We stay in the while loop until the delay becomes too long (10 seconds)
+    # or we successfully push data to re:infer.
+    while (delay < 10):
+        time.sleep(delay)
 
+        response = requests.put(path, headers=headers, data=data_json )
+
+        try:
+            response_dict = ast.literal_eval(response.content)
+            if response_dict['status'] == 'ok':
+                print index, response_dict
+                return  # This is the 'successful' end of the function
+
+        except:
+            # If we are here, it usually means we have received a 5xx error
+            pass
+
+        delay += 2
+
+    print "----------------- index %d failed -----------------" % index
+    print response.content
+
+    # If errors persist, return index of the failed batch of data
+    return index
 
 def create_messages(comment, speaker_list, time_stamp_list, dialog_list):
     comment['messages'] = []
@@ -31,9 +51,9 @@ def create_messages(comment, speaker_list, time_stamp_list, dialog_list):
 
         # Message directed to next speaker in speaker_list
         if turn_number == len(speaker_list) - 1: # i.e if last speaker
-            message['to'] = 'empty'
+            message['to'] = ['empty']
         else:
-            message['to'] = speaker_list[turn_number + 1]
+            message['to'] = [speaker_list[turn_number + 1]]
 
         comment['messages'].append(message)
 
@@ -45,19 +65,20 @@ def create_users(comment, speaker_list):
         key = 'string:speaker_' + str(index)
         comment['user_properties'][key] = speaker
 
-def create_comment(raw_line):
+def create_comment(raw_line, unique_id):
     line = json.loads(raw_line)
 
     # Load variables from line
     speaker_list = line.get('speaker_list', 'empty')
     time_stamp_list = line.get('time_stamp_list', 'empty')
-    id = line.get('dialog_id', 'empty')
     dialog_list = line.get('dialog_list', 'empty')
 
     # A comment is a complete back and forth conversation.
     comment = {}
     comment['timestamp'] = time_stamp_list[0]
-    comment['id'] = str(id) + "18"
+
+    # To avoid conflicts with repeated id's in the Ubuntu Corpus
+    comment['id'] = str(unique_id)
 
     # Adds a chain of messages to a comment
     create_messages(comment, speaker_list, time_stamp_list, dialog_list)
