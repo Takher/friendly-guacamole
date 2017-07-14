@@ -11,7 +11,7 @@ DATASET = 'testing_ubuntu_support_chat'
 FILE_PATH = "./data/movies/data_movie_2000.json"
 TIMESTAMP_GIVEN = False
 
-data_url = "https://reinfer.io/api/voc/datasets/%s/%s/comments"% OWNER, DATASET
+data_url = "https://reinfer.io/api/voc/datasets/%s/%s/comments"%(OWNER, DATASET)
 
 comments = []  # Contains a list of every 'comment'
 batches = []  # comments in batches of 1024
