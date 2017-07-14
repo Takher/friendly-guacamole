@@ -3,6 +3,27 @@ from collections import OrderedDict
 import json
 import requests
 import time
+from random import randrange
+import datetime
+import pytz
+import random
+
+
+def random_date():
+    year = random.randint(2010, 2016)
+    month = random.randint(1, 12)
+    day = random.randint(1, 28)
+    hour = random.randint(1, 23)
+    minute = random.randint(1, 59)
+    return datetime.datetime(year, month, day, hour, minute, 0, 0, pytz.UTC)
+
+def random_date_list(list):
+    current = random_date()
+    dates = []
+    for i in xrange(list):
+        current = current + datetime.timedelta(minutes=randrange(10))
+        dates.append(current.isoformat())
+    return dates
 
 def send_data(TOKEN, batch, index, path):
     # Structure data in specified format
@@ -10,12 +31,11 @@ def send_data(TOKEN, batch, index, path):
     data['comments'] = batch
 
     delay = 0
-
     data_json = json.dumps(data)
     headers = {"X-Auth-Token": TOKEN, "Content-Type": "application/json"}
 
-    # We stay in the while loop until the delay becomes too long (10 seconds)
-    # or we successfully push data to re:infer.
+    # Stay in the while loop until data is uploaded or delay becomes too
+    # long (10 seconds)
     while (delay < 10):
         time.sleep(delay)
 
@@ -65,16 +85,19 @@ def create_users(comment, speaker_list):
         key = 'string:speaker_' + str(index)
         comment['user_properties'][key] = speaker
 
-def create_comment(raw_line, unique_id):
+def create_comment(raw_line, unique_id, timestamp_given):
     line = json.loads(raw_line)
-
-    # Load variables from line
-    speaker_list = line.get('speaker_list', 'empty')
-    time_stamp_list = line.get('time_stamp_list', 'empty')
-    dialog_list = line.get('dialog_list', 'empty')
 
     # A comment is a complete back and forth conversation.
     comment = {}
+
+    # Load variables from line
+    speaker_list = line.get('speaker_list', 'empty')
+    dialog_list = line.get('dialog_list', 'empty')
+
+    # if we don't have a time_stamp_list, we generate one
+    time_stamp_list = line.get('time_stamp_list', random_date_list(len(dialog_list)))
+
     comment['timestamp'] = time_stamp_list[0]
 
     # To avoid conflicts with repeated id's in the Ubuntu Corpus
