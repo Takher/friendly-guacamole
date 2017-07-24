@@ -2,3 +2,4 @@ test.py
 /data
 *.pyc
 .idea
+.ipynb_checkpoints
