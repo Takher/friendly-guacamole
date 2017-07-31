@@ -1,5 +1,12 @@
+# To jot down and test rough code
 test.py
+# Datasets
 /data
+
+# Pycharm/jupyter created files
 *.pyc
 .idea
 .ipynb_checkpoints
+
+# To jot down and test rough code
+tester_notebook.ipynb

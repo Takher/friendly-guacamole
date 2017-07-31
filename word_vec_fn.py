@@ -8,6 +8,7 @@ import json
 from sklearn.preprocessing import MultiLabelBinarizer, StandardScaler
 from sklearn.datasets import make_multilabel_classification
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import zero_one_loss
 
 from libact.base.dataset import Dataset
 from libact.labelers import IdealLabeler
@@ -55,6 +56,8 @@ def load_glove_model(gloveFile, word_count=100000):
     # Saves time by loading existing file, if available.
     if os.path.exists(path):
         glove = np.load(path).item()
+        print '100,000 glove vectors loaded from existing file.'
+
     else:
         f = open(gloveFile,'r')
         glove = {}
@@ -70,29 +73,29 @@ def load_glove_model(gloveFile, word_count=100000):
                 break
         # Saves the vectors, so we can load it faster next time.
         np.save(path, glove)
+        print '100,000 glove vectors loaded.'
 
     return glove
 
-def load_data(loc='./data/maluuba/data_frames.json'):
-    """Loads data directly from JSON. Input data should have the form:
-        ...what about stop words???
-    
+def load_data_mal(model, loc='./data/maluuba/data_frames.json'):
+    """Loads data directly from JSON. JSON dataset must contain the keys
+    "labels" and "dialog_list", for example:
+    "labels": [["inform"], ["suggest"], ["negate", "thankyou"]],
+    "dialog_list": [
+        "HI im from Alexandria looking to book a 12 day vacation",
+        "I only have flights available to Vancouver, Canada at the moment.",
+        "I will look elsewhere thank you!"]
+
     :param loc: string
         Locates the directory in which the data is saved.
 
-    :return: X_list, list
-        List of all the dialog turns as a list of strings. 
-        Example:
-        ['First conversation first turn.','First conversation second turn.',
-         ..., 'Last conversation, last turn']
-    :return: Y_list, list
-        All labels corresponding to each dialog turn as embedded lists.
-        Example:
-        [['label_7'],['label_2'], ['label_4','label_1'], ['label_3'], ...]
+    :return: X, numpy array shape (n_samples, n_features)
+
+    :return: Y, numpy array shape (n_samples, n_classes)
     """
     X_list, Y_list = [], []
     
-    with open(loc, 'r') as file: # Add maluuba to input
+    with open(loc, 'r') as file:
         for line in file:
             line = json.loads(line)
             dialog_list = line.get('dialog_list', 'empty')
@@ -100,9 +103,60 @@ def load_data(loc='./data/maluuba/data_frames.json'):
             
             # Since, for now, each dialog is an example i.e. we ignore context
             X_list.extend(dialog_list)
-            Y_list.extend(labels)
-    return X_list, Y_list
 
+            # All labels in Y_list correspond to each dialog turn as embedded
+            # lists. Example:
+            # [['label_7'],['label_2'], ['label_4','label_1'], ['label_3'], ..]
+            Y_list.extend(labels)
+
+    # Y is a numpy array, shape (n_samples, n_classes)
+    mlb = MultiLabelBinarizer()
+    Y = mlb.fit_transform(Y_list)
+
+
+    # Place each example (vector representation of a turn in conversation),
+    # as a row in a matrix.  X has shape (n_examples, n_features)
+    X = np.asarray(sentences2vec(X_list, model))
+
+    return X, Y
+
+
+def load_data_amz(model, loc='./data/amazon/amazon_mixed_dataset.json'):
+    """Loads data directly from JSON. Input data should have the form:
+        ...what about stop words???
+
+    :param loc: string
+        Locates the directory in which the data is saved.
+
+    :return: X, numpy array shape (n_samples, n_classes)
+
+    :return: Y, numpy array shape (n_samples, n_classes)
+    """
+    X_list, Y_list = [], []
+
+    with open(loc, 'r') as file:
+        for line in file:
+            line = json.loads(line)
+            review = line.get('text', 'empty')
+            labels = line.get('labels', 'empty')
+
+            # Since, for now, each dialog is an example i.e. we ignore context
+            X_list.extend([review])
+
+            # All labels in Y_list correspond to each dialog turn as embedded
+            # lists. Example:
+            # [['label_7'],['label_2'], ['label_4','label_1'], ['label_3'], ..]
+            Y_list.extend([[labels]])
+
+    # Y is a numpy array, shape (n_samples, n_classes)
+    mlb = MultiLabelBinarizer()
+    Y = mlb.fit_transform(Y_list)
+
+    # Place each example (vector representation of a turn in conversation),
+    # as a row in a matrix.  X has shape (n_examples, n_features)
+    X = np.asarray(sentences2vec(X_list, model))
+
+    return X, Y
 
 def sentences2vec(sentences, glove):
     """ Uses the glove word vectors to convert whole sentences to single
@@ -123,18 +177,19 @@ def sentences2vec(sentences, glove):
     if type(sentences) != list: 
         print "sentences2vec requires a list of sentence/s"
         return
-    
+
     sentence_vectors = []
     for sentence in sentences:
         sentence = word_tokenize(sentence)
-        stop_removed = remove_stop_words(sentence)
 
+        # Optional: remove stop words
+        # stop_removed = remove_stop_words(sentence)
         # If, when we remove stopwords, turns of the conversation have no
         # content, we leave the stopwords in
-        if len(stop_removed )!=0: sentence = stop_removed
+        # if len(stop_removed )!=0: sentence = stop_removed
 
         matched_words = len(sentence)
-        
+
         # All vectors have the same dimensionality. Using an example
         # 'word' to set the size of our new sentence vector.
         sum_of_words = np.zeros(len(glove[',']))
@@ -146,34 +201,24 @@ def sentences2vec(sentences, glove):
         if matched_words != 0: # Necessary, to ensure we don't divide by zero.
             sentence_vector = sum_of_words/matched_words
             sentence_vectors.append(sentence_vector)
+        else:
+            # For empty reviews we will use a placeholder
+            # (will change code so this entry is deleted from dataset)
+            sentence_vectors.append(glove.get(',', 0))
 
     return sentence_vectors
 
 
-def full_trn_tst(data_in, test_size, num_labelled):
-    # Dictionary {word:vector}, where each word is a key, and the value is a
-    # row vector of shape (n_features,).
+def full_trn_tst(X, Y, train_size, test_size, num_labelled):
 
-    model = load_glove_model('./data/glove.840B.300d.txt')
-    X, Y = load_data(data_in)
-    print 'Sentences and labels loaded.'
-
-    mlb = MultiLabelBinarizer()
-    
-    # Y is a numpy array, shape (n_samples, n_classes)
-    Y = mlb.fit_transform(Y)
-    
-    # Place each example (turn in conversation) as a vectors, as a row in a 
-    # matrix.  X has shape (n_examples, n_features)
-    X = np.asarray(sentences2vec(X, model))
-    
     # Preprocessing:
     # X = StandardScaler().fit_transform(X)
     # if args.pca: X = process_pca(args.pca, X)
     # else: pass
 
     # Randomly split the X and y arrays according to test_size.
-    X_trn, X_tst, Y_trn, Y_tst = train_test_split(X, Y, test_size=test_size)
+    X_trn, X_tst, Y_trn, Y_tst = train_test_split(X, Y, test_size=test_size,
+                                                  train_size=train_size)
 
     # We are giving the Dataset 'num_labelled' fully labelled examples 
     Y_trn_mix = Y_trn[:num_labelled].tolist()+[None]*(len(Y_trn)-num_labelled)
@@ -222,8 +267,12 @@ def split_train_test(test_size, num_labelled):
     return trn_ds, tst_ds, fully_labeled_trn_ds
 
 
-def run(trn_ds, tst_ds, lbr, model, qs, quota, fully_labeled_trn_ds): # Why haven;t we used the fullly_labelled training set? Would be useful to get its loss i.e ideal loss
-    C_out, C_out_f1 = [], []
+def run(trn_ds, tst_ds, lbr, model, qs, quota, fully_labeled_trn_ds):
+    C_out, C_out_01 = [], []
+
+    # Used to produce additional metrics not covered in libact
+    tst_X, tst_y = zip(*tst_ds.data)
+
     for _ in range(quota):
         # Query strategy (MMC, BinMin, RandomSampling,
         # MultilabelWithAuxiliaryLearner) returns id of example to query
@@ -244,10 +293,10 @@ def run(trn_ds, tst_ds, lbr, model, qs, quota, fully_labeled_trn_ds): # Why have
         # have chosen to recieve the Hamming loss, which is the fraction of
         # labels that are incorrectly predicted
         C_out = np.append(C_out, model.score(tst_ds, criterion='hamming'))
+        C_out_01 = np.append(C_out_01, zero_one_loss(np.asarray(tst_y), model.predict(tst_X)))
 
-        C_out_f1 = C_out
 
-    return C_out, C_out_f1
+    return C_out, C_out_01
 
 
 def experiments(fully_labeled_trn_ds, trn_ds, tst_ds, quota):
@@ -290,16 +339,16 @@ def experiments(fully_labeled_trn_ds, trn_ds, tst_ds, quota):
     print "before qs1"
     # MMC requires a 'base learner' for its binary relevance
     qs = MMC(trn_ds, br_base=LogisticRegression())
-    E_out_1, E_out_f1_1 = run(trn_ds, tst_ds, lbr, model, qs, quota,
+    E_out_1, E_out_01_1 = run(trn_ds, tst_ds, lbr, model, qs, quota,
                               fully_labeled_trn_ds)
-    results['MMC'] = [E_out_1, E_out_f1_1]
+    results['MMC'] = [E_out_1, E_out_01_1]
 
     print "before qs2"
 
     qs2 = RandomSampling(trn_ds2)
-    E_out_2, E_out_f1_2 = run(trn_ds2, tst_ds, lbr, model, qs2, quota,
+    E_out_2, E_out_01_2 = run(trn_ds2, tst_ds, lbr, model, qs2, quota,
                               fully_labeled_trn_ds)
-    results['Random'] = [E_out_2, E_out_f1_2]
+    results['Random'] = [E_out_2, E_out_01_2]
 
     print "before qs3"
 
@@ -315,9 +364,9 @@ def experiments(fully_labeled_trn_ds, trn_ds, tst_ds, quota):
         BinaryRelevance(LogisticRegression()),
         BinaryRelevance(SVM()),
         criterion='hlr')
-    E_out_3, E_out_f1_3 = run(trn_ds3, tst_ds, lbr, model, qs3, quota,
+    E_out_3, E_out_01_3 = run(trn_ds3, tst_ds, lbr, model, qs3, quota,
                               fully_labeled_trn_ds)
-    results['Aux_hlr'] = [E_out_3, E_out_f1_3]
+    results['Aux_hlr'] = [E_out_3, E_out_01_3]
 
     print "before qs4"
 
@@ -326,9 +375,9 @@ def experiments(fully_labeled_trn_ds, trn_ds, tst_ds, quota):
         BinaryRelevance(LogisticRegression()),
         BinaryRelevance(SVM()),
         criterion='shlr')
-    E_out_4, E_out_f1_4 = run(trn_ds4, tst_ds, lbr, model, qs4, quota,
+    E_out_4, E_out_01_4 = run(trn_ds4, tst_ds, lbr, model, qs4, quota,
                               fully_labeled_trn_ds)
-    results['Aux_shlr'] = [E_out_4, E_out_f1_4]
+    results['Aux_shlr'] = [E_out_4, E_out_01_4]
 
     print "before qs5"
 
@@ -337,17 +386,47 @@ def experiments(fully_labeled_trn_ds, trn_ds, tst_ds, quota):
         BinaryRelevance(LogisticRegression()),
         BinaryRelevance(SVM()),
         criterion='mmr')
-    E_out_5, E_out_f1_5 = run(trn_ds5, tst_ds, lbr, model, qs5, quota,
+    E_out_5, E_out_01_5 = run(trn_ds5, tst_ds, lbr, model, qs5, quota,
                               fully_labeled_trn_ds)
-    results['Aux_mmr'] = [E_out_5, E_out_f1_5]
+    results['Aux_mmr'] = [E_out_5, E_out_01_5]
 
     print "before qs6"
     # BinMin only needs a Continuous Model to eveluate uncertainty
     qs6 = BinaryMinimization(trn_ds6, LogisticRegression())
-    E_out_6, E_out_f1_6 = run(trn_ds6, tst_ds, lbr, model, qs6, quota,
+    E_out_6, E_out_01_6 = run(trn_ds6, tst_ds, lbr, model, qs6, quota,
                               fully_labeled_trn_ds)
-    results['BinMin'] = [E_out_6, E_out_f1_6]
+    results['BinMin'] = [E_out_6, E_out_01_6]
 
     print "Done qs6"
 
     return results
+
+###############################################################################
+##### function used for creating amazon dataset ###############################
+#
+# import json
+# import gzip
+# import os
+# import glob
+#
+# def parse(path):
+#     g = gzip.open(path, 'r')
+#     for l in g:
+#         yield eval(l)
+#
+# with open('./data/amazon/amazon_mixed_dataset.json', 'w') as outfile:
+#     path = "./data/amazon/*.gz"
+#     for fname in glob.glob(path):
+#         i = 0
+#         for line in parse(fname):
+#             newline = {}
+#             # Should be a better way to do this?
+#             newline['labels'] = category = \
+#             os.path.basename(fname).split('.')[0][8:]
+#             newline['text'] = line['reviewText']
+#             json.dump(newline, outfile)
+#             outfile.write('\n')
+#             i += 1
+#             if i >= 1000: break
+###############################################################################
+###############################################################################
